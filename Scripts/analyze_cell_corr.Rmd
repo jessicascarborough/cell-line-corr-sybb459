@@ -1,0 +1,274 @@
+---
+title: "Analyze Correlation and Cell Subtype"
+author: "Jessica Scarborough"
+date: "4/8/2020"
+output: html_document
+---
+---
+title: "Cleaning GDSC Data"
+linkcolor: blue
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    number_sections: true
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+options(max.print="75")
+knitr::opts_chunk$set(comment=NA,
+                      message=FALSE,
+                      warning=FALSE)
+knitr::opts_knit$set(width=75)
+
+library(here); library(patchwork); library(mosaic)
+library(forcats)
+library(Hmisc); library(janitor); library(tidyverse)
+
+```
+# Load Data
+
+```{r load_data}
+
+load(here("Data", "cleaned_gdsc_data.RData"))
+
+```
+
+# Correlation Matrices
+
+## Build Correlation Matrices
+
+First, we'll build correlation matrices from the cell line expression data using both Pearson and Spearman correlation methods
+
+```{r gene_exp_corr}
+# Custom function from: http://www.sthda.com/english/wiki/correlation-matrix-a-quick-start-guide-to-analyze-format-and-visualize-a-correlation-matrix-using-r-software
+
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    cellline1 = rownames(cormat)[row(cormat)[ut]],
+    cellline2 = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+    )
+}
+
+# Pearson Correlation
+corr_mat_pearson <- rcorr(as.matrix(expr_gdsc_data), type="pearson")
+corr_pearson <- flattenCorrMatrix(corr_mat_pearson$r, corr_mat_pearson$P)
+min(corr_pearson$cor, na.rm = TRUE)
+max(corr_pearson$cor, na.rm = TRUE)
+
+# Spearman Correlation
+corr_mat_spearman <- rcorr(as.matrix(expr_gdsc_data), type="spearman")
+corr_spearman <- flattenCorrMatrix(corr_mat_spearman$r, corr_mat_spearman$P)
+min(corr_spearman$cor, na.rm = TRUE)
+max(corr_spearman$cor, na.rm = TRUE)
+
+save(corr_mat_pearson, corr_pearson,
+     corr_mat_spearman, corr_spearman,
+     file = here("Data", "correlation_results.RData"))
+
+```
+
+## Explore Correlation Matrices
+
+```{r viz_corr_matrices}
+# Pearson Correlation
+bin_w <- 0.01
+res1 <- mosaic::fav_stats(corr_pearson$cor)
+
+g_pearson <- ggplot(corr_pearson, aes(x = cor)) + 
+  ggtitle("Pearson Correlation") +
+  geom_histogram(binwidth = bin_w) +
+  stat_function( # Plot Normal curve
+        fun = function(x) dnorm(x, mean = res1$mean,
+                                sd = res1$sd) *
+            res1$n * bin_w,
+        col = "lightblue3", size = 1.5) +
+  labs(x = "rho") +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# Spearman Correlation
+bin_w <- 0.01
+res2 <- mosaic::fav_stats(corr_spearman$cor)
+
+g_spearman <- ggplot(corr_spearman, aes(x = cor)) +
+  ggtitle("Spearman Correlation") +
+  geom_histogram(binwidth = bin_w) +
+  stat_function( # Plot Normal curve
+        fun = function(x) dnorm(x, mean = res2$mean,
+                                sd = res2$sd) *
+            res2$n * bin_w,
+        col = "lightblue3", size = 1.5) +
+  labs(x = "rho") +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5))
+
+
+# Plot together 
+g_pearson + g_spearman + 
+  plot_annotation("Distribution of correlation coefficients for all cell line pairs in GDSC",
+                  subtitle = "With theoretical normal curve overlayed",
+                  theme = theme(plot.title = element_text(hjust = 0.5),
+                                plot.subtitle = element_text(hjust = 0.5)))
+
+```
+
+## Assess Correlation Ranking
+
+```{r find_quartiles}
+
+find_rankings <- function(cell_line_corr_df){
+  percentiles <- quantile(cell_line_corr_df$cor, seq(0, 1, 0.01))
+  quartile_levels <- c("cor <= 25%", "25% < cor <= 50%", "50% < cor <= 75%", "cor > 75%")
+  percentile_levels <- c("cor <= 10%", "10% < cor <= 20%", "20% < cor <= 30%", 
+                         "30% < cor <= 40%", "40% < cor <= 50%", "50% < cor <= 60%", 
+                         "60% < cor <= 70%", "70% < cor <= 80%", "80% < cor <= 90%", 
+                         "cor > 90%")
+  cell_line_corr_df <- cell_line_corr_df %>%
+    mutate(cor_quartile = case_when(cor > percentiles["75%"] ~ quartile_levels[4], 
+                                cor <= percentiles["75%"] & cor > percentiles["50%"] ~ quartile_levels[3],
+                                cor <= percentiles["50%"] & cor > percentiles["25%"] ~ quartile_levels[2],
+                                cor <= percentiles["25%"] ~ quartile_levels[1])) %>%
+    mutate(cor_quartile = fct_relevel(cor_quartile, quartile_levels)) %>%
+    mutate(cor_percentile = case_when(cor > percentiles["90%"] ~ percentile_levels[10],
+                                  cor <= percentiles["90%"] & cor > percentiles["80%"] ~ percentile_levels[9],
+                                  cor <= percentiles["80%"] & cor > percentiles["70%"] ~ percentile_levels[8],
+                                  cor <= percentiles["70%"] & cor > percentiles["60%"] ~ percentile_levels[7],
+                                  cor <= percentiles["60%"] & cor > percentiles["50%"] ~ percentile_levels[6],
+                                  cor <= percentiles["50%"] & cor > percentiles["40%"] ~ percentile_levels[5],
+                                  cor <= percentiles["40%"] & cor > percentiles["30%"] ~ percentile_levels[4],
+                                  cor <= percentiles["30%"] & cor > percentiles["20%"] ~ percentile_levels[3],
+                                  cor <= percentiles["20%"] & cor > percentiles["10%"] ~ percentile_levels[2],
+                                  cor <= percentiles["10%"] ~ percentile_levels[1])) %>%
+    mutate(cor_percentile = fct_relevel(cor_percentile, percentile_levels))
+  return(cell_line_corr_df)
+}
+
+corr_ranking_pearson <- find_rankings(corr_pearson)
+corr_ranking_spearman <- find_rankings(corr_spearman)
+
+```
+
+
+# Cancer Cell Type Concordance
+
+```{r find_concordance}
+
+find_concordance <- function(cell_line_corr_df, meta_data = cell_line_details, labels){
+  concordance_df <- merge(cell_line_corr_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["TCGA"])], 
+                          by.x = "cellline1", by.y = "COSMIC.identifier")
+  concordance_df <- merge(concordance_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["TCGA"])], 
+                          by.x = "cellline2", by.y = "COSMIC.identifier")
+  concordance_df <- merge(concordance_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["GDSC1"])], 
+                          by.x = "cellline1", by.y = "COSMIC.identifier")
+  concordance_df <- merge(concordance_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["GDSC1"])], 
+                          by.x = "cellline2", by.y = "COSMIC.identifier")
+  concordance_df <- merge(concordance_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["GDSC2"])], 
+                          by.x = "cellline1", by.y = "COSMIC.identifier")
+  concordance_df <- merge(concordance_df, 
+                          meta_data[ , c("COSMIC.identifier", labels["GDSC2"])], 
+                          by.x = "cellline2", by.y = "COSMIC.identifier")
+  colnames(concordance_df) <- c(colnames(concordance_df)[1:(length(colnames(concordance_df))-6)], 
+                                "TCGA_Label1", "TCGA_Label2", 
+                                "GDSC1_Label1", "GDSC1_Label2", 
+                                "GDSC2_Label1", "GDSC2_Label2")
+  concordance_df <- concordance_df %>%
+    mutate(TCGA_Concordance = ifelse(
+                        is.na(TCGA_Label1==TCGA_Label2), NA,
+                          ifelse(TCGA_Label1==TCGA_Label2, "yes", "no")),
+           TCGA_Concordance = fct_relevel(TCGA_Concordance, c("yes", "no"))) %>%
+    mutate(GDSC1_Concordance = ifelse(
+                        is.na(GDSC1_Label1==GDSC1_Label2), NA,
+                          ifelse(GDSC1_Label1==GDSC1_Label2, "yes", "no")),
+           GDSC1_Concordance = fct_relevel(GDSC1_Concordance, c("yes", "no"))) %>%
+    mutate(GDSC2_Concordance = ifelse(
+                        is.na(GDSC2_Label1==GDSC2_Label2), NA,
+                          ifelse(GDSC2_Label1==GDSC2_Label2, "yes", "no")),
+           GDSC2_Concordance = fct_relevel(GDSC2_Concordance, c("yes", "no")))
+  return(concordance_df)
+}
+
+labels = c(GDSC1 = "GDSC.Tissue.descriptor.1", 
+           GDSC2 = "GDSC.Tissue.descriptor.2",
+           TCGA = "Cancer.Type..matching.TCGA.label.")
+
+pearson_concordance <- find_concordance(corr_ranking_pearson, labels = labels)
+spearman_concordance <- find_concordance(corr_ranking_spearman, labels = labels)
+
+save(pearson_concordance, spearman_concordance, 
+     file = here("Data", "concordance_results.RData"))
+
+```
+
+
+# Assess Correlation and Concordance
+
+## Pearson Correlation
+```{r construct_pearson_tabyls}
+
+pearson_quartile_tcga_tbl <- pearson_concordance %>%
+  tabyl(TCGA_Concordance, cor_quartile)
+pearson_quartile_tcga_tbl
+
+pearson_quartile_GDSC1_tbl <- pearson_concordance %>%
+  tabyl(GDSC1_Concordance, cor_quartile)
+pearson_quartile_GDSC1_tbl
+
+pearson_quartile_GDSC2_tbl <- pearson_concordance %>%
+  tabyl(GDSC2_Concordance, cor_quartile)
+pearson_quartile_GDSC2_tbl
+
+pearson_percentile_tcga_tbl <- pearson_concordance %>%
+  tabyl(TCGA_Concordance, cor_percentile)
+pearson_percentile_tcga_tbl
+
+pearson_percentile_GDSC1_tbl <- pearson_concordance %>%
+  tabyl(GDSC1_Concordance, cor_percentile)
+pearson_percentile_GDSC1_tbl
+
+pearson_percentile_GDSC2_tbl <- pearson_concordance %>%
+  tabyl(GDSC2_Concordance, cor_percentile)
+pearson_percentile_GDSC2_tbl
+
+```
+
+
+## Spearman Correlation
+```{r construct_spearman_tabyls}
+
+spearman_quartile_tcga_tbl <- spearman_concordance %>%
+  tabyl(TCGA_Concordance, cor_quartile)
+spearman_quartile_tcga_tbl
+
+spearman_quartile_GDSC1_tbl <- spearman_concordance %>%
+  tabyl(GDSC1_Concordance, cor_quartile)
+spearman_quartile_GDSC1_tbl
+
+spearman_quartile_GDSC2_tbl <- spearman_concordance %>%
+  tabyl(GDSC2_Concordance, cor_quartile)
+spearman_quartile_GDSC2_tbl
+
+spearman_percentile_tcga_tbl <- spearman_concordance %>%
+  tabyl(TCGA_Concordance, cor_percentile)
+spearman_percentile_tcga_tbl
+
+spearman_percentile_GDSC1_tbl <- spearman_concordance %>%
+  tabyl(GDSC1_Concordance, cor_percentile)
+spearman_percentile_GDSC1_tbl
+
+spearman_percentile_GDSC2_tbl <- spearman_concordance %>%
+  tabyl(GDSC2_Concordance, cor_percentile)
+spearman_percentile_GDSC2_tbl
+
+```
