@@ -17,9 +17,9 @@ library(tidyverse)
 
 # Introduction
 
-In order to run this script, the [`raw_GDSC2_data.zip` file](https://drive.google.com/open?id=1nsfVgA-3AQFr6khf80FW2b_d2hYR_7jO) must be downloaded from Google Drive. 
-It should be a directory within the `Data` directory of this R Project.
-The original dataset is documented at [www.cancerrxgene.org](https://www.cancerrxgene.org). 
+In order to run this script, the `raw_GDSC2_data.zip` file (found in the `Data` subdirectory of this project) must be unzipped.
+These unzipped files are too large to be pushed to the GitHub directory unless using a paid version with large file storage. 
+The original dataset (along with all the raw data) is documented at [www.cancerrxgene.org](https://www.cancerrxgene.org). 
 
 # Meta Cell Line Data (downloaded 22 August 19)
 
@@ -28,7 +28,9 @@ Here we read in the meta data for GDSC.
 This contains all the cell lines by various identifiers (we use `COSMIC_ID`) and descriptions of each line, including tissue and histology of origin. 
 
 ```{r read_gdsc_meta}
-cell_line_details <- read.csv("../Data/raw_GDSC2_Data/cell_line_details.csv", 
+unzip(here("Data", "raw_GDSC2_data.zip"))
+
+cell_line_details <- read.csv(here("Data", "raw_GDSC2_Data", "cell_line_details.csv"), 
                                stringsAsFactors = FALSE, na.strings = c("", "UNABLE TO CLASSIFY"))
 
 ```
@@ -56,8 +58,8 @@ cell_line_details <- cell_line_details[!(cell_line_details$Sample.Name =="TOTAL:
 
 Here we upload the drug response data from the second version of the GDSC dataset (GDSC2). Each cell line can still be identified using `COSMIC_ID`.
 ```{r upload_gdsc_drug}
-dr_gdsc2 <- read.csv2("../Data/raw_GDSC2_Data/GDSC2_fitted_dose_response_17Jul19.csv", 
-                      sep = ",", stringsAsFactors = FALSE)
+dr_gdsc2 <- read.csv(here("Data", "raw_GDSC2_Data", "GDSC2_fitted_dose_response_17Jul19.csv"), 
+                     stringsAsFactors = FALSE)
 ```
 
 ## Clean Data
@@ -96,8 +98,8 @@ Genes that have a blank entry for the gene symbol are removed.
 Details on the experimental protocols can be found [here](https://www.cancerrxgene.org/gdsc1000/GDSC1000_WebResources/Home.html). 
 
 ```{r read_gdsc_expr}
-expr_gdsc_data <- read.csv2("../Data/raw_GDSC2_Data/Cell_line_RMA_proc_basalExp.csv", 
-                            sep = ",", stringsAsFactors = FALSE)
+expr_gdsc_data <- read.csv(here("Data", "raw_GDSC2_Data", "Cell_line_RMA_proc_basalExp.csv"),
+                           stringsAsFactors = FALSE)
 expr_gdsc_data <- expr_gdsc_data[!(expr_gdsc_data$GENE_SYMBOLS==""), ]
 ```
 
@@ -120,7 +122,7 @@ If the user wishes to run the query themselves, they may uncomment all lines exc
 #                           uniqueRows = TRUE,
 #                           mart = ensembl)
 # saveRDS(gdsc_hgnc_entrez, "../biomaRt_query.rds")
-gdsc_hgnc_entrez <- readRDS("../biomaRt_query_091619.rds")
+gdsc_hgnc_entrez <- readRDS(here("biomaRt_query_091619.rds"))
 ```
 
 
@@ -194,6 +196,6 @@ And finally, we'll save all our data into a single .RData file.
 save(dr_gdsc2, 
      expr_gdsc_data, 
      cell_line_details, 
-     file = "../Data/cleaned_gdsc_data.RData")
-# load("../Data/cleaned_gdsc_data.RData")
+     file = here("Data", "cleaned_gdsc_data.RData"))
+# load(here("Data", "cleaned_gdsc_data.RData"))
 ```

@@ -1,11 +1,5 @@
 ---
 title: "Analyze Correlation and Cell Subtype"
-author: "Jessica Scarborough"
-date: "4/8/2020"
-output: html_document
----
----
-title: "Cleaning GDSC Data"
 linkcolor: blue
 output:
   rmdformats::readthedown:
@@ -13,6 +7,7 @@ output:
     number_sections: true
     code_folding: show
 ---
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -24,11 +19,13 @@ knitr::opts_chunk$set(comment=NA,
 knitr::opts_knit$set(width=75)
 
 library(here); library(patchwork); library(mosaic)
-library(forcats)
-library(Hmisc); library(janitor); library(tidyverse)
+library(forcats); library(Hmisc); library(janitor); 
+library(wesanderson); library(ggmosaic); library(tidyverse)
 
 ```
+
 # Load Data
+First, we'll load all the data that was cleaned using the `clean_data.Rmd` script. 
 
 ```{r load_data}
 
@@ -40,7 +37,7 @@ load(here("Data", "cleaned_gdsc_data.RData"))
 
 ## Build Correlation Matrices
 
-First, we'll build correlation matrices from the cell line expression data using both Pearson and Spearman correlation methods
+And next, we'll build correlation matrices from the cell line expression data using both Pearson and Spearman correlation methods. The rho value will serve as the distance measure between cell lines. This will require 10-20 minutes of computational time. 
 
 ```{r gene_exp_corr}
 # Custom function from: http://www.sthda.com/english/wiki/correlation-matrix-a-quick-start-guide-to-analyze-format-and-visualize-a-correlation-matrix-using-r-software
@@ -74,6 +71,7 @@ save(corr_mat_pearson, corr_pearson,
 ```
 
 ## Explore Correlation Matrices
+Let's look at the distribution of correlation values (rho) within the dataset. As we see below, both Pearson and Spearman methods result in a relatively normal distribution of correlation values. 
 
 ```{r viz_corr_matrices}
 # Pearson Correlation
@@ -120,6 +118,7 @@ g_pearson + g_spearman +
 ```
 
 ## Assess Correlation Ranking
+Cell line pairs will be labeled by how they rank within the distribution of all correlation values for all cell line pairs within the dataset.  
 
 ```{r find_quartiles}
 
@@ -158,7 +157,38 @@ corr_ranking_spearman <- find_rankings(corr_spearman)
 
 # Cancer Cell Type Concordance
 
-```{r find_concordance}
+First we'll take a look at the labels used to classify cancer subtypes in cell lines found in GDSC.
+
+Next, we'll label all cell line's using three labels provided in the GDSC metadata. we'll print all options from each label type, `TCGA`, `GDSC1`, or `GDSC2.` Cell line pairs will be labeled as a binary `yes` or `no` based on whether their `TCGA`, `GDSC1`, or `GDSC2` labels match. 
+
+## View `TCGA`, `GDSC1`, and `GDSC2` labels
+We'll examine all the labels provided by each method (`TCGA`, `GDSC1`, `GDSC2`).
+
+### `TCGA`
+```{r view_TCGA_subtype_labels}
+unique(cell_line_details$Cancer.Type..matching.TCGA.label.)
+```
+
+### `GDSC1`
+
+```{r view_GDSC1_subtype_labels}
+unique(cell_line_details$GDSC.Tissue.descriptor.1)
+```
+
+### `GDSC2`
+
+```{r view_GDSC2_subtype_labels}
+unique(cell_line_details$GDSC.Tissue.descriptor.2)
+```
+
+
+## Find Concordance
+
+Here is our function for finding concordance between cell line pairs. First, we'll merge label data from the `cell_line_details`, creating columns with labels for each of the cell lines in a cell line pair. This creates 6 extra columns classifying each of the cell lines per pair with all three labels, TCGA_Label1, TCGA_Label2, GDSC1_Label1, GDSC1_Label2, GDSC2_Label1, and GDSC2_Label2. 
+
+Then, three more columns will be created to assess concordance between each label of the cell line pairs. If either of the cell lines have `NA` as their subtype label, the concordance label between them will also be `NA`.
+
+```{r label_cell_lines}
 
 find_concordance <- function(cell_line_corr_df, meta_data = cell_line_details, labels){
   concordance_df <- merge(cell_line_corr_df, 
@@ -203,72 +233,451 @@ labels = c(GDSC1 = "GDSC.Tissue.descriptor.1",
            GDSC2 = "GDSC.Tissue.descriptor.2",
            TCGA = "Cancer.Type..matching.TCGA.label.")
 
+```
+
+
+We'll run this function to find concordance between cell line pairs in the Pearson and Spearman correlation dataframes.
+
+```{r find_concordance}
 pearson_concordance <- find_concordance(corr_ranking_pearson, labels = labels)
 spearman_concordance <- find_concordance(corr_ranking_spearman, labels = labels)
+pearson_concordance_clean <- pearson_concordance %>%
+  drop_na()
+spearman_concordance_clean <- spearman_concordance %>%
+  drop_na()
 
 save(pearson_concordance, spearman_concordance, 
+     pearson_concordance_clean, spearman_concordance_clean,
      file = here("Data", "concordance_results.RData"))
 
+# load(here("Data", "concordance_results.RData"))
 ```
 
 
 # Assess Correlation and Concordance
+And finally, tabyls will be compiled to examine the proportion of cell line pairs that are concordant based on where their correlation values rank between all cell line pairs within the dataset. This will be done splitting the cell line pairs by quartile and by 10th percentile incriments. Each table will be visualized using a mosaic plot and the data will be used in a chi-square analysis. 
+
+As seen below, concordance between cancer cell types consistenty increases as the correlation between gene expression increases. Although the results are statistically significant in all instances (correlation metric, cutoff values, etc), it is unclear whether or not there is biological significance. Even in the group with the highest cancer cell type concordance, we see only 30.5% of cell line pairs with cell type concordance. It is possible that this is enough to significantly influence algorithms which rely solely on gene expression correlation between cell lines as a measure of similarity. However, we cannot be sure solely from these data.
+
 
 ## Pearson Correlation
-```{r construct_pearson_tabyls}
+
+### Pearson TCGA Quartile Tabyles
+```{r construct_pearson_tabyls_tcga_quar}
 
 pearson_quartile_tcga_tbl <- pearson_concordance %>%
-  tabyl(TCGA_Concordance, cor_quartile)
-pearson_quartile_tcga_tbl
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
 
-pearson_quartile_GDSC1_tbl <- pearson_concordance %>%
-  tabyl(GDSC1_Concordance, cor_quartile)
-pearson_quartile_GDSC1_tbl
+pearson_quartile_tcga_tbl %>%
+  knitr::kable()
 
-pearson_quartile_GDSC2_tbl <- pearson_concordance %>%
-  tabyl(GDSC2_Concordance, cor_quartile)
-pearson_quartile_GDSC2_tbl
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(TCGA_Concordance, cor_quartile), fill=TCGA_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type TCGA Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
 
-pearson_percentile_tcga_tbl <- pearson_concordance %>%
-  tabyl(TCGA_Concordance, cor_percentile)
-pearson_percentile_tcga_tbl
 
-pearson_percentile_GDSC1_tbl <- pearson_concordance %>%
-  tabyl(GDSC1_Concordance, cor_percentile)
-pearson_percentile_GDSC1_tbl
-
-pearson_percentile_GDSC2_tbl <- pearson_concordance %>%
-  tabyl(GDSC2_Concordance, cor_percentile)
-pearson_percentile_GDSC2_tbl
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_quartile) %>%
+  chisq.test()
 
 ```
+
+### Pearson GDSC1 Quartile Tabyles
+```{r construct_pearson_tabyls_gdsc1_quar}
+
+
+pearson_quartile_GDSC1_tbl <- pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+pearson_quartile_GDSC1_tbl %>%
+  knitr::kable()
+
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC1_Concordance, cor_quartile), fill=GDSC1_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC1 Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_quartile) %>%
+  chisq.test()
+```
+
+### Pearson GDSC2  Quartile Tabyles
+```{r construct_pearson_tabyls_gdsc2_quar}
+
+
+pearson_quartile_GDSC2_tbl <- pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+pearson_quartile_GDSC2_tbl %>%
+  knitr::kable()
+
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC2_Concordance, cor_quartile), fill=GDSC2_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC2 Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_quartile) %>%
+  chisq.test()
+
+
+```
+
+
+### Pearson TCGA 10th Percentile Tabyles
+```{r construct_pearson_tabyls_tcga_perc}
+
+pearson_percentile_tcga_tbl <- pearson_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+pearson_percentile_tcga_tbl %>%
+  knitr::kable()
+
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(TCGA_Concordance, cor_percentile), fill=TCGA_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type TCGA Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_percentile) %>%
+  chisq.test()
+
+```
+
+
+### Pearson GDSC1 10th Percentile Tabyles
+```{r construct_pearson_tabyls_gdsc1_perc}
+
+
+pearson_percentile_GDSC1_tbl <- pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+pearson_percentile_GDSC1_tbl %>%
+  knitr::kable()
+
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC1_Concordance, cor_percentile), fill=GDSC1_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC1 Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_percentile) %>%
+  chisq.test()
+```
+
+
+### Pearson GSDC2 10th Percentile Tabyles
+```{r construct_pearson_tabyls_gdsc2_perc}
+
+
+pearson_percentile_GDSC2_tbl <- pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+pearson_percentile_GDSC2_tbl %>%
+  knitr::kable()
+
+ggplot(data = pearson_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC2_Concordance, cor_percentile), fill=GDSC2_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC2 Concordance by Gene Expr Pearson Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+pearson_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_percentile) %>%
+  chisq.test()
+
+```
+
 
 
 ## Spearman Correlation
-```{r construct_spearman_tabyls}
+
+
+### Spearman TCGA Quartile Tabyles
+```{r construct_spearman_tabyls_tcga_quar}
 
 spearman_quartile_tcga_tbl <- spearman_concordance %>%
-  tabyl(TCGA_Concordance, cor_quartile)
-spearman_quartile_tcga_tbl
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
 
-spearman_quartile_GDSC1_tbl <- spearman_concordance %>%
-  tabyl(GDSC1_Concordance, cor_quartile)
-spearman_quartile_GDSC1_tbl
+spearman_quartile_tcga_tbl %>%
+  knitr::kable()
 
-spearman_quartile_GDSC2_tbl <- spearman_concordance %>%
-  tabyl(GDSC2_Concordance, cor_quartile)
-spearman_quartile_GDSC2_tbl
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(TCGA_Concordance, cor_quartile), fill=TCGA_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type TCGA Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
 
-spearman_percentile_tcga_tbl <- spearman_concordance %>%
-  tabyl(TCGA_Concordance, cor_percentile)
-spearman_percentile_tcga_tbl
 
-spearman_percentile_GDSC1_tbl <- spearman_concordance %>%
-  tabyl(GDSC1_Concordance, cor_percentile)
-spearman_percentile_GDSC1_tbl
-
-spearman_percentile_GDSC2_tbl <- spearman_concordance %>%
-  tabyl(GDSC2_Concordance, cor_percentile)
-spearman_percentile_GDSC2_tbl
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_quartile) %>%
+  chisq.test()
 
 ```
+
+### Spearman GDSC1 Quartile Tabyles
+```{r construct_spearman_tabyls_gdsc1_quar}
+
+
+spearman_quartile_GDSC1_tbl <- spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+spearman_quartile_GDSC1_tbl %>%
+  knitr::kable()
+
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC1_Concordance, cor_quartile), fill=GDSC1_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC1 Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_quartile) %>%
+  chisq.test()
+```
+
+
+### Spearman GDSC2 Quartile Tabyles
+```{r construct_spearman_tabyls_gdsc2_quar}
+
+spearman_quartile_GDSC2_tbl <- spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_quartile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+spearman_quartile_GDSC2_tbl %>%
+  knitr::kable()
+
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC2_Concordance, cor_quartile), fill=GDSC2_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC2 Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_quartile) %>%
+  chisq.test()
+
+
+```
+
+
+### Spearman TCGA 10th Percentile Tabyles
+```{r construct_spearman_tabyls_tcga_perc}
+
+spearman_percentile_tcga_tbl <- spearman_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+spearman_percentile_tcga_tbl %>%
+  knitr::kable()
+
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(TCGA_Concordance, cor_percentile), fill=TCGA_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type TCGA Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(TCGA_Concordance, cor_percentile) %>%
+  chisq.test()
+
+```
+
+### Spearman GDSC1 10th Percentile Tabyles
+
+```{r construct_spearman_tabyls_gdsc1_perc}
+
+spearman_percentile_GDSC1_tbl <- spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+spearman_percentile_GDSC1_tbl %>%
+  knitr::kable()
+
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC1_Concordance, cor_percentile), fill=GDSC1_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC1 Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC1_Concordance, cor_percentile) %>%
+  chisq.test()
+```
+
+
+### Spearman GDSC2 10th Percentile Tabyles
+
+```{r construct_spearman_tabyls_gdsc2_perc}
+
+spearman_percentile_GDSC2_tbl <- spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_percentile) %>%
+  adorn_percentages("col") %>% 
+  adorn_pct_formatting(rounding = "half up", digits = 1) %>%
+  adorn_ns()
+  # adorn_title("combined") 
+
+spearman_percentile_GDSC2_tbl %>%
+  knitr::kable()
+
+ggplot(data = spearman_concordance_clean) +
+  geom_mosaic(aes(x = product(GDSC2_Concordance, cor_percentile), fill=GDSC2_Concordance),
+              show.legend = FALSE) +
+  ggtitle(label = "Cancer Type GDSC2 Concordance by Gene Expr Spearman Corr") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 0),
+        axis.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5,
+                                  size = 15)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = wes_palette("Darjeeling2", n = 2))
+
+
+spearman_concordance %>%
+  drop_na() %>%
+  tabyl(GDSC2_Concordance, cor_percentile) %>%
+  chisq.test()
+
+```
+
+
